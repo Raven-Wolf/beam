@@ -4069,7 +4069,10 @@ PROTO_METHOD(CreateShieldedInput_4)
 	assert(nRemaining);
 
 	CompactPoint* pG = (CompactPoint*)(pIn + 1);
-	if (nIn != sizeof(*pG) * nRemaining)
+
+	// (nIn != sizeof(*pG) * nRemaining) - not good, because of a possible overflow.
+	// Better do division. Don't care about potential trailing input less than size of an element
+	if (nRemaining != nIn / sizeof(*pG))
 		return c_KeyKeeper_Status_ProtoError;
 
 
