@@ -2506,6 +2506,7 @@ uint16_t KeyKeeper_Invoke(KeyKeeper* p, const uint8_t* pIn, uint32_t nIn, uint8_
 		return MakeStatus(c_KeyKeeper_Status_ProtoError, 0xfd);
 
 	uint32_t nOutSize = *pOutSize;
+	uint16_t retVal;
 
 	switch (*pIn)
 	{
@@ -2517,16 +2518,21 @@ uint16_t KeyKeeper_Invoke(KeyKeeper* p, const uint8_t* pIn, uint32_t nIn, uint8_
  \
 		*pOutSize = sizeof(OpOut_##name); \
 \
-		return HandleProto_##name(p, (OpIn_##name*) pIn, nIn - sizeof(OpIn_##name), (OpOut_##name*) pOut, nOutSize - sizeof(OpOut_##name), pOutSize); \
+		retVal = HandleProto_##name(p, (OpIn_##name*) pIn, nIn - sizeof(OpIn_##name), (OpOut_##name*) pOut, nOutSize - sizeof(OpOut_##name), pOutSize); \
  	} \
 	break; \
 
 		BeamCrypto_ProtoMethods(THE_MACRO)
 #undef THE_MACRO
 
+	default:
+		retVal = MakeStatus(c_KeyKeeper_Status_ProtoError, 0xff);
 	}
 
-	return MakeStatus(c_KeyKeeper_Status_ProtoError, 0xff);
+	if (c_KeyKeeper_Status_Ok != retVal)
+		p->m_State = 0; // make sure not to leave partially-modified state, that would look legit in the future. Current policy: mutable state reset after any error
+
+	return retVal;
 }
 
 PROTO_METHOD(Version)
@@ -2857,7 +2863,7 @@ PROTO_METHOD(TxAddCoins)
 
 	if ((pIn->m_Reset) || (c_KeyKeeper_State_TxBalance != p->m_State))
 	{
-		ZERO_OBJ(p->u);
+		ZERO_OBJ(p->u.m_TxBalance);
 		p->m_State = c_KeyKeeper_State_TxBalance;
 	}
 
