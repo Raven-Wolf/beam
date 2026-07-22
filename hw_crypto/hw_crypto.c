@@ -2894,13 +2894,8 @@ typedef struct
 	secp256k1_scalar m_kNonce;
 } KernelKeys;
 
-__stack_hungry__
-static int KernelUpdateKeysEx(TxKernelCommitments* pComms, const KernelKeys* pKeys, const TxKernelCommitments* pAdd)
+static int KernelUpdateKeysInternal(TxKernelCommitments* pComms, const KernelKeys* pKeys, const TxKernelCommitments* pAdd, gej_t* pGej)
 {
-	gej_t pGej[2];
-	Gej_Init(pGej);
-	Gej_Init(pGej + 1);
-
 	MulG(pGej, &pKeys->m_kKrn);
 	MulG(pGej + 1, &pKeys->m_kNonce);
 
@@ -2924,14 +2919,26 @@ static int KernelUpdateKeysEx(TxKernelCommitments* pComms, const KernelKeys* pKe
 #else // BeamCrypto_ExternalGej
 	Point_Gej_2_Normalize(pGej);
 
-	Point_Compact_from_Ge(&pComms->m_Commitment, (secp256k1_ge*) pGej);
-	Point_Compact_from_Ge(&pComms->m_NoncePub, (secp256k1_ge*) (pGej + 1));
+	Point_Compact_from_Ge(&pComms->m_Commitment, (secp256k1_ge*)pGej);
+	Point_Compact_from_Ge(&pComms->m_NoncePub, (secp256k1_ge*)(pGej + 1));
 #endif // BeamCrypto_ExternalGej
+
+	return 1;
+}
+
+__stack_hungry__
+static int KernelUpdateKeysEx(TxKernelCommitments* pComms, const KernelKeys* pKeys, const TxKernelCommitments* pAdd)
+{
+	gej_t pGej[2];
+	Gej_Init(pGej);
+	Gej_Init(pGej + 1);
+
+	auto ret = KernelUpdateKeysInternal(pComms, pKeys, pAdd, pGej);
 
 	Gej_Destroy(pGej);
 	Gej_Destroy(pGej + 1);
 
-	return 1;
+	return ret;
 }
 
 static int KernelUpdateKeys(TxKernelCommitments* pComms, const KernelKeys* pKeys, const TxKernelCommitments* pAdd)
@@ -3993,21 +4000,21 @@ PROTO_METHOD(CreateShieldedInput_2)
 
 
 	{
-		gej_t gej;
-		Gej_Init(&gej);
-		secp256k1_ge ge;
+		union {
+			secp256k1_ge ge;
+			secp256k1_scalar e;
+		} u2;
 
-		secp256k1_scalar e;
-
-		MulG(&gej, &u.k);
-
-		if (!Point_Ge_from_Compact(&ge, &pIn->m_NoncePub))
+		if (!Point_Ge_from_Compact(&u2.ge, &pIn->m_NoncePub))
 			return MakeStatus(c_KeyKeeper_Status_Unspecified, 22); // import failed
 
-		wrap_gej_add_ge_var(&gej, &gej, &ge);
+		gej_t gej;
+		Gej_Init(&gej);
+		MulG(&gej, &u.k);
+		wrap_gej_add_ge_var(&gej, &gej, &u2.ge);
 
-		Point_Ge_from_Gej(&ge, &gej);
-		Point_Compact_from_Ge(&pOut->m_NoncePub, &ge);
+		Point_Ge_from_Gej(&u2.ge, &gej);
+		Point_Compact_from_Ge(&pOut->m_NoncePub, &u2.ge);
 		Gej_Destroy(&gej);
 
 		Oracle o2;
@@ -4016,15 +4023,15 @@ PROTO_METHOD(CreateShieldedInput_2)
 		secp256k1_sha256_write_UintBig(&o2.m_sha, &hvSigGen);
 
 		// 1st challenge
-		Oracle_NextScalar(&o2, &e);
+		Oracle_NextScalar(&o2, &u2.e);
 
-		wrap_scalar_mul(&e, &p->u.m_Ins.m_skOutp, &e);
-		secp256k1_scalar_add(&u.k, &u.k, &e); // nG += skOutp * e
+		wrap_scalar_mul(&u2.e, &p->u.m_Ins.m_skOutp, &u2.e);
+		secp256k1_scalar_add(&u.k, &u.k, &u2.e); // nG += skOutp * e
 
 		// 2nd challenge
-		Oracle_NextScalar(&o2, &e);
-		wrap_scalar_mul(&e, &p->u.m_Ins.m_skSpend, &e);
-		secp256k1_scalar_add(&u.k, &u.k, &e); // nG += skSpend * e
+		Oracle_NextScalar(&o2, &u2.e);
+		wrap_scalar_mul(&u2.e, &p->u.m_Ins.m_skSpend, &u2.e);
+		secp256k1_scalar_add(&u.k, &u.k, &u2.e); // nG += skSpend * e
 
 		// to sig
 		secp256k1_scalar_negate(&u.k, &u.k);
