@@ -3963,7 +3963,10 @@ PROTO_METHOD(CreateShieldedInput_2)
 	for (uint32_t i = 0; i < _countof(pIn->m_pABCD); i++)
 		secp256k1_sha256_write_CompactPoint(&pOracle->m_sha, pIn->m_pABCD + i);
 
-	secp256k1_scalar k;
+	union {
+		secp256k1_scalar k;
+		UintBig hvAux;
+	} u;
 
 	{
 		// derive nonce. Sensitive commitments (corresponding to secret keys) were already exposed
@@ -3973,12 +3976,18 @@ PROTO_METHOD(CreateShieldedInput_2)
 		secp256k1_hmac_sha256_t hmac;
 		NonceGenerator_InitBegin(&ng, &hmac, szSalt, sizeof(szSalt));
 
+		// add the secret parameters: our secret keys
+		secp256k1_scalar_get_b32(u.hvAux.m_pVal, &p->u.m_Ins.m_skSpend);
+		secp256k1_hmac_sha256_write_UintBig(&hmac, &u.hvAux);
+		secp256k1_scalar_get_b32(u.hvAux.m_pVal, &p->u.m_Ins.m_skOutp);
+		secp256k1_hmac_sha256_write_UintBig(&hmac, &u.hvAux);
+
 		secp256k1_hmac_sha256_write_UintBig(&hmac, &hvSigGen);
 		secp256k1_hmac_sha256_write_CompactPoint(&hmac, &pIn->m_NoncePub);
 
 		NonceGenerator_InitEnd(&ng, &hmac);
 
-		NonceGenerator_NextScalar(&ng, &k);
+		NonceGenerator_NextScalar(&ng, &u.k);
 		SECURE_ERASE_OBJ(ng);
 	}
 
@@ -3990,7 +3999,7 @@ PROTO_METHOD(CreateShieldedInput_2)
 
 		secp256k1_scalar e;
 
-		MulG(&gej, &k);
+		MulG(&gej, &u.k);
 
 		if (!Point_Ge_from_Compact(&ge, &pIn->m_NoncePub))
 			return MakeStatus(c_KeyKeeper_Status_Unspecified, 22); // import failed
@@ -4010,16 +4019,16 @@ PROTO_METHOD(CreateShieldedInput_2)
 		Oracle_NextScalar(&o2, &e);
 
 		wrap_scalar_mul(&e, &p->u.m_Ins.m_skOutp, &e);
-		secp256k1_scalar_add(&k, &k, &e); // nG += skOutp * e
+		secp256k1_scalar_add(&u.k, &u.k, &e); // nG += skOutp * e
 
 		// 2nd challenge
 		Oracle_NextScalar(&o2, &e);
 		wrap_scalar_mul(&e, &p->u.m_Ins.m_skSpend, &e);
-		secp256k1_scalar_add(&k, &k, &e); // nG += skSpend * e
+		secp256k1_scalar_add(&u.k, &u.k, &e); // nG += skSpend * e
 
 		// to sig
-		secp256k1_scalar_negate(&k, &k);
-		secp256k1_scalar_get_b32(pOut->m_SigG.m_pVal, &k);
+		secp256k1_scalar_negate(&u.k, &u.k);
+		secp256k1_scalar_get_b32(pOut->m_SigG.m_pVal, &u.k);
 	}
 
 	p->m_State = c_KeyKeeper_State_CreateShielded_2;
